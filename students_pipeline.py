@@ -3,6 +3,7 @@ import psycopg
 import pandas as pd
 from dotenv import load_dotenv
 import os
+import re
 
 # Load environment variables from .env file
 load_dotenv()
@@ -23,17 +24,30 @@ def normalize_column_name(name:str)->str:
     s = re.sub(r"\s+", "_", s)
     s = re.sub(r"[^a-z0-9_]", "",s)
     s = re.sub(r"_+", "_",s)
-    s = re.sub("_")
+    s = s.strip("_")
     return s or str(name)
 
-def normalize_df_columns(df: pdf.DataFrame)->pd.DataFrame:
+def normalize_df_columns(df: pd.DataFrame)->pd.DataFrame:
     mapping = {col: normalize_column_name(col) for col in df.columns}
     return df.rename(columns=mapping)
 
-def coerce_str(x):
+def normalize_str(x)->str | None:
     if pd.isna(x):
         return None
-    return str(x).strip()
+    s = str(x).strip()
+    return s.title() if s != "" else None
+
+def normalize_phone(x:str)->str | None:
+    if pd.isna(x) or str(x).strip() =="":
+        return None
+    s = re.sub(r"[^\d+]", "", str(x)) # keep digits and + if present
+    return s or None
+
+def normalize_number(x:str)->str | None:
+    if pd.isna(x):
+        return None
+    s = re.sub(r"\s+", "", str(x))
+    return s or None
 
 # Get all values from a Google worksheet and ingest it into a pandas data frame
 def get_all_ws_values(gc:gspread.service_account, wb_name: str, ws_name:str,unique_field=str,header_row:int=1, data_row:int=2)->pd.DataFrame:
@@ -49,12 +63,10 @@ def get_all_ws_values(gc:gspread.service_account, wb_name: str, ws_name:str,uniq
 
 #_______________________________canonical schema -----------------------------------------
 CANONICAL_COLUMNS = [
-    "timestamp","surname","first_names","id_number","email","street_address","suburb","city","postal_code",
-    "province","contact_number","alternate_contact_number","province","sars_number","beneficiary_number",
-    "banking_institution","bank_account_number","account_type"
-]
+    "timestamp","first_names","surname","id_number","contact_number","alternate_contact_number","email","street_address","suburb","city",
+    "province","postal_code","sars_number","beneficiary_number","banking_institution","bank_account_number","account_type"]
 
-mapping_df={
+mapping_dict={
     "timestamp":"timestamp",
     "surname":"surname",
     "last_name":"surname",
@@ -77,16 +89,52 @@ mapping_df={
     "cellphone":"contact_number",
     "cellular_numbers":"contact_number",
     "whatsapp_number":"alternate_contact_number",
-
-
-
-    "city
-
-
-
-
+    "telephone":"alternate_contact_number",
+    "sars_tax_number":"sars_tax_number",
+    "sars_number":"sars_tax_number",
+    "sars_number_if_you_have_one": "sars_tax_number",
+    "banking_institution":"banking_institution",
+    "bank_account_number":"bank_account_number",
+    "account_type":"account_type",
+    "bank_account_type":"account_type"
 
 }
+
+# -----------------------------------normalization & mapping function ---------------------------------------
+def normalize_and_map(df:pd.DataFrame, mapping:dict[str,str]=mapping_dict, canonical_cols:list[str]=CANONICAL_COLUMNS)->pd.DataFrame:
+
+    # normalize headers
+    df = normalize_df_columns(df)
+
+    # Rename columns to those in the mapping
+    df_mapped = df.rename(columns=mapping)
+
+    # 🔥 Drop duplicate columns 
+    df_mapped = df_mapped.loc[:, ~df_mapped.columns.duplicated(keep='first')].copy()
+
+
+    # Insert canonical columns not found in the dataframe and initialize to zero
+    for col in canonical_cols:
+        if col not in df_mapped.columns:
+            df_mapped[col] = None
+
+    # Restructure dataframe to only include mapped columns (in desired order)
+    df_final = df_mapped[canonical_cols].copy()
+
+    #Normalize specific columns 
+    for col in df_final.columns:
+        if col == "timestamp":# do nothing if its time stamp
+            continue 
+        elif col in {"contact_number","alternate_contact_number"}:
+            df_final[col] = df_final[col].apply(normalize_phone) # Remove spaces between digits and plus sign (if present)
+        elif col in {"id_number","postal_code","sars_number","beneficiary_number"}:
+            df_final[col] = df_final[col].apply(normalize_number) # Remove spaces between digits
+        else:
+            df_final[col] = df_final[col].apply(normalize_str)# For the rest of the columns simply clean the strings
+    
+    return df_final
+    
+    
 stocktaker_app_spreadsheet= "Updated Dial A Stocktaker Application Form (Responses) NEW"
 stoctkater_app_response = "Form responses 1"
 
@@ -101,17 +149,20 @@ back_area_app_response = "Form Responses 1"
 
 print("Getting values for Stocktaker applications")
 stocktakers_df = get_all_ws_values(gc,stocktaker_app_spreadsheet,stoctkater_app_response,"ID Number")
+stocktakers_df = normalize_and_map(stocktakers_df)
 print("Getting values for Dial A Students applications")
 das_students_df = get_all_ws_values(gc,dial_a_student_spreadsheet,dial_a_student_response,"South African ID Number")
+das_students_df = normalize_and_map(das_students_df )
 print("Getting values for Coordinator applications")
 coordinators_df = get_all_ws_values(gc,coordinators_app_spreadsheet,coordinators_app_response,"Identity Number :") 
+coordinators_df = normalize_and_map(coordinators_df )
 print("Getting values for Back Area applications")
 back_area_df = get_all_ws_values(gc,back_area_app_spreadsheet ,back_area_app_response,"Identity Number :",0,1)
+back_area_df = normalize_and_map(back_area_df )
 
-print(coordinators_df)
-print(back_area_df)
+print(stocktakers_df.sample(10))
+print(das_students_df.sample(10))
+print(coordinators_df.sample(10))
+print(back_area_df.sample(10))
 
-'''for col in list(das_students_df.columns):
-    print(col)
-'''
 
