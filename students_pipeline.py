@@ -160,9 +160,10 @@ print("Getting values for Back Area applications")
 back_area_df = get_all_ws_values(gc,back_area_app_spreadsheet ,back_area_app_response,"Identity Number :",0,1)
 back_area_df = normalize_and_map(back_area_df )
 
-print(stocktakers_df.sample(10))
-print(das_students_df.sample(10))
-print(coordinators_df.sample(10))
-print(back_area_df.sample(10))
+print("Combining dataframes")
+combined_df = stocktakers_df.combine_first(das_students_df)
+combined_df = combined_df.combine_first(back_area_df)
+combined_df = combined_df.combine_first(coordinators_df)
 
-
+print("Final combined dataframe")
+print(combined_df)
