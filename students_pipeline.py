@@ -1,5 +1,6 @@
 import gspread
-import psycopg
+import psycopg2
+from psycopg2 import connect
 import pandas as pd
 from dotenv import load_dotenv
 import os
@@ -8,16 +9,6 @@ import re
 # Load environment variables from .env file
 load_dotenv()
 gc = gspread.service_account("./das-students-007f6500ea37.json")
-
-#print(sh.sheet1.get('H1100'))
-def get_env()->dict:
-    return {
-        "db_host" : os.getenv("db_host"),
-        "db_name"  : os.getenv("db_name"),
-        "db_user" : os.getenv("das_admin"),
-        "db_password" : os.getenv("db_password"),
-        "db_port" : os.getenv("db_port")
-    }
 
 def normalize_column_name(name:str)->str:
     s = str(name).lower()
@@ -68,18 +59,24 @@ CANONICAL_COLUMNS = [
 
 mapping_dict={
     "timestamp":"timestamp",
+    "last_updated":"timestamp",
     "surname":"surname",
     "last_name":"surname",
     "first_names": "first_names",
+    "first_name":"first_names",
     "id_number": "id_number",
+    "id" : "id_number",
     "identity_number":"id_number",
     "south_african_id_number":"id_number",
     "street_address":"street_address",
+    "street": "street_address",
     "residential_street_address":"street_address",
     "permanent_home_address":"street_address",
     "suburb":"suburb",
+    "suburb_township":"suburb",
     "residential_suburb":"suburb",
     "citytown":"city",
+    "city_town":"city",
     "residential_citytown":"city",
     "code":"postal_code",
     "post_code":"postal_code",
@@ -89,6 +86,7 @@ mapping_dict={
     "cellphone":"contact_number",
     "cellular_numbers":"contact_number",
     "whatsapp_number":"alternate_contact_number",
+    "secondary_contact_number": "alternate_contact_number",
     "telephone":"alternate_contact_number",
     "sars_tax_number":"sars_tax_number",
     "sars_number":"sars_tax_number",
@@ -136,7 +134,7 @@ def normalize_and_map(df:pd.DataFrame, mapping:dict[str,str]=mapping_dict, canon
     
     
 stocktaker_app_spreadsheet= "Updated Dial A Stocktaker Application Form (Responses) NEW"
-stoctkater_app_response = "Form responses 1"
+stocktaker_app_response = "Form responses 1"
 
 dial_a_student_spreadsheet = "Dial a Student Application Form (2nd Version) (Responses)"
 dial_a_student_response = "Form responses 1"
@@ -147,8 +145,9 @@ coordinators_app_response ="Form Responses 1"
 back_area_app_spreadsheet ="Back Area Online Application Form (Responses)"
 back_area_app_response = "Form Responses 1"
 
+
 print("Getting values for Stocktaker applications")
-stocktakers_df = get_all_ws_values(gc,stocktaker_app_spreadsheet,stoctkater_app_response,"ID Number")
+stocktakers_df = get_all_ws_values(gc,stocktaker_app_spreadsheet,stocktaker_app_response,"ID Number")
 stocktakers_df = normalize_and_map(stocktakers_df)
 print("Getting values for Dial A Students applications")
 das_students_df = get_all_ws_values(gc,dial_a_student_spreadsheet,dial_a_student_response,"South African ID Number")
@@ -160,10 +159,36 @@ print("Getting values for Back Area applications")
 back_area_df = get_all_ws_values(gc,back_area_app_spreadsheet ,back_area_app_response,"Identity Number :",0,1)
 back_area_df = normalize_and_map(back_area_df )
 
+db_name = os.getenv("DB_NAME")
+db_host= os.getenv("DB_HOST")
+db_pwd= os.getenv("DB_PWD")
+db_port= os.getenv("DB_PORT")
+db_user= os.getenv("DB_USER")
+
+conn_string = f"dbname={db_name} user={db_user} password={db_pwd} host={db_host} port={db_port}"
+
+registered_stocktakers_df = pd.DataFrame()
+
+try:
+    with psycopg2.connect(conn_string) as con:
+        print("Getting values from the Activelist")
+        with con.cursor() as cur:
+            cur.execute("SELECT * FROM staging_stocktaker_tb")
+            columns = [desc[0] for desc in cur.description]
+            data = cur.fetchall()
+            registered_stocktakers_df = pd.DataFrame(data, columns=columns)
+
+except Exception as e:
+    print(f"Database connection failed: {e}")
+#    print("Make sure PostgreSQL is running: sudo systemctl start postgresql")
+
+registered_stocktakers_df = normalize_and_map(registered_stocktakers_df)
+
 print("Combining dataframes")
 combined_df = stocktakers_df.combine_first(das_students_df)
 combined_df = combined_df.combine_first(back_area_df)
 combined_df = combined_df.combine_first(coordinators_df)
+combined_df = combined_df.combine_first(registered_stocktakers_df)
 
 print("Final combined dataframe")
 print(combined_df)
