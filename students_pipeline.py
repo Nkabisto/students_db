@@ -5,6 +5,10 @@ import pandas as pd
 from dotenv import load_dotenv
 import os
 import re
+import asyncio
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import text
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -98,6 +102,28 @@ mapping_dict={
 
 }
 
+# ------------------CREATE TABLE IF NOT EXISTS statement baseed on your combined_df.dtypes, assuming column names and types match the canonical schema
+combined_students_table_query = """
+CREATE TABLE IF NOT EXISTS combined_students_table (
+    timestamp TIMESTAMP,
+    first_names TEXT,
+    surname TEXT,
+    id_number TEXT,
+    contact_number TEXT,
+    alternate_contact_number TEXT,
+    email TEXT,
+    street_address TEXT,
+    suburb TEXT,
+    city TEXT,
+    province TEXT,
+    postal_code TEXT,
+    sars_number TEXT,
+    beneficiary_number TEXT,
+    banking_institution TEXT,
+    bank_account_number TEXT,
+    account_type TEXT
+);
+"""
 # -----------------------------------normalization & mapping function ---------------------------------------
 def normalize_and_map(df:pd.DataFrame, mapping:dict[str,str]=mapping_dict, canonical_cols:list[str]=CANONICAL_COLUMNS)->pd.DataFrame:
 
@@ -132,63 +158,101 @@ def normalize_and_map(df:pd.DataFrame, mapping:dict[str,str]=mapping_dict, canon
     
     return df_final
     
-    
-stocktaker_app_spreadsheet= "Updated Dial A Stocktaker Application Form (Responses) NEW"
-stocktaker_app_response = "Form responses 1"
-
-dial_a_student_spreadsheet = "Dial a Student Application Form (2nd Version) (Responses)"
-dial_a_student_response = "Form responses 1"
-
-coordinators_app_spreadsheet ="Co-ordinator Online Application Form (Responses) OUR Version" 
-coordinators_app_response ="Form Responses 1" 
-
-back_area_app_spreadsheet ="Back Area Online Application Form (Responses)"
-back_area_app_response = "Form Responses 1"
-
-
-print("Getting values for Stocktaker applications")
-stocktakers_df = get_all_ws_values(gc,stocktaker_app_spreadsheet,stocktaker_app_response,"ID Number")
-stocktakers_df = normalize_and_map(stocktakers_df)
-print("Getting values for Dial A Students applications")
-das_students_df = get_all_ws_values(gc,dial_a_student_spreadsheet,dial_a_student_response,"South African ID Number")
-das_students_df = normalize_and_map(das_students_df )
-print("Getting values for Coordinator applications")
-coordinators_df = get_all_ws_values(gc,coordinators_app_spreadsheet,coordinators_app_response,"Identity Number :") 
-coordinators_df = normalize_and_map(coordinators_df )
-print("Getting values for Back Area applications")
-back_area_df = get_all_ws_values(gc,back_area_app_spreadsheet ,back_area_app_response,"Identity Number :",0,1)
-back_area_df = normalize_and_map(back_area_df )
-
-db_name = os.getenv("DB_NAME")
-db_host= os.getenv("DB_HOST")
-db_pwd= os.getenv("DB_PWD")
-db_port= os.getenv("DB_PORT")
-db_user= os.getenv("DB_USER")
-
-conn_string = f"dbname={db_name} user={db_user} password={db_pwd} host={db_host} port={db_port}"
-
-registered_stocktakers_df = pd.DataFrame()
-
-try:
-    with psycopg2.connect(conn_string) as con:
-        print("Getting values from the Activelist")
+def createTableIfNotFound(con: connect, table_name: str, schema: str):
+    try:
+        # Check if table exists, if not, create it
         with con.cursor() as cur:
-            cur.execute("SELECT * FROM staging_stocktaker_tb")
-            columns = [desc[0] for desc in cur.description]
-            data = cur.fetchall()
-            registered_stocktakers_df = pd.DataFrame(data, columns=columns)
+            cur.execute("""
+                SELECT EXISTS(
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = %s
+                );
+            """, (table_name,))
+            table_exists = cur.fetchone()[0]
 
-except Exception as e:
-    print(f"Database connection failed: {e}")
-#    print("Make sure PostgreSQL is running: sudo systemctl start postgresql")
+            if not table_exists:
+                logger.info(f"Table {table_name} does not exist. Creating it.")
+                with con.cursor() as cur:
+                    cur.execute(schema)
+                con.commit()
 
-registered_stocktakers_df = normalize_and_map(registered_stocktakers_df)
+    except psycopg2.Error as e:
+        logger.error(f"Error checking/creating table {table_name}: {e}")
+        con.rollback()   
 
-print("Combining dataframes")
-combined_df = stocktakers_df.combine_first(das_students_df)
-combined_df = combined_df.combine_first(back_area_df)
-combined_df = combined_df.combine_first(coordinators_df)
-combined_df = combined_df.combine_first(registered_stocktakers_df)
+if __name__ == "__main__":
+    stocktaker_app_spreadsheet= "Updated Dial A Stocktaker Application Form (Responses) NEW"
+    stocktaker_app_response = "Form responses 1"
 
-print("Final combined dataframe")
-print(combined_df)
+    dial_a_student_spreadsheet = "Dial a Student Application Form (2nd Version) (Responses)"
+    dial_a_student_response = "Form responses 1"
+
+    coordinators_app_spreadsheet ="Co-ordinator Online Application Form (Responses) OUR Version" 
+    coordinators_app_response ="Form Responses 1" 
+
+    back_area_app_spreadsheet ="Back Area Online Application Form (Responses)"
+    back_area_app_response = "Form Responses 1"
+
+
+    print("Getting values for Stocktaker applications")
+    stocktakers_df = get_all_ws_values(gc,stocktaker_app_spreadsheet,stocktaker_app_response,"ID Number")
+    stocktakers_df = normalize_and_map(stocktakers_df)
+    print("Getting values for Dial A Students applications")
+    das_students_df = get_all_ws_values(gc,dial_a_student_spreadsheet,dial_a_student_response,"South African ID Number")
+    das_students_df = normalize_and_map(das_students_df )
+    print("Getting values for Coordinator applications")
+    coordinators_df = get_all_ws_values(gc,coordinators_app_spreadsheet,coordinators_app_response,"Identity Number :") 
+    coordinators_df = normalize_and_map(coordinators_df )
+    print("Getting values for Back Area applications")
+    back_area_df = get_all_ws_values(gc,back_area_app_spreadsheet ,back_area_app_response,"Identity Number :",0,1)
+    back_area_df = normalize_and_map(back_area_df )
+
+    db_name = os.getenv("DB_NAME")
+    db_host= os.getenv("DB_HOST")
+    db_pwd= os.getenv("DB_PWD")
+    db_port= os.getenv("DB_PORT")
+    db_user= os.getenv("DB_USER")
+
+    conn_string = f"dbname={db_name} user={db_user} password={db_pwd} host={db_host} port={db_port}"
+
+    registered_stocktakers_df = pd.DataFrame()
+
+    try:
+        with psycopg2.connect(conn_string) as con:
+            print("Getting values from the Activelist")
+            with con.cursor() as cur:
+                cur.execute("SELECT * FROM staging_stocktaker_tb")
+                columns = [desc[0] for desc in cur.description]
+                data = cur.fetchall()
+                registered_stocktakers_df = pd.DataFrame(data, columns=columns)
+    
+            registered_stocktakers_df = normalize_and_map(registered_stocktakers_df)
+
+            print("Combining dataframes")
+            combined_df = stocktakers_df.combine_first(das_students_df)
+            combined_df = combined_df.combine_first(back_area_df)
+            combined_df = combined_df.combine_first(coordinators_df)
+            combined_df = combined_df.combine_first(registered_stocktakers_df)
+
+            print("Final combined dataframe")
+            print(combined_df)
+            
+            table_name = "combined_students_table"
+            conflict_keys = ["id_number"]
+            columns = combined_df.columns
+            update_clause = ", ".join(
+                f"{col} = EXCLUDED.{col}" for col in columns if col not in conflict_keys
+            )
+
+            createTableIfNotFound(con,table_name,combined_students_table_query)
+            upsert_sql = f"""
+            INSERT INTO {table_name} ({', '.join(columns)})
+            SELECT {', '.join(columns)} FROM {table_name}
+            ON CONFLICT ({', '.join(conflict_keys)}) DO UPDATE SET {update_clause};
+            """
+            await con.execute(text(upsert_sql)
+        await 
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+    #    print("Make sure PostgreSQL is running: sudo systemctl start postgresql")
+
