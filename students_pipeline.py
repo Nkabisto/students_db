@@ -5,11 +5,13 @@ import pandas as pd
 from dotenv import load_dotenv
 import os
 import re
+import logging
+import io
+from config import CANONICAL_COLUMNS, mapping_dict, combined_students_table_query, SHEET_CONFIGS 
 
-
-# Load environment variables from .env file
-load_dotenv()
-gc = gspread.service_account("./das-students-007f6500ea37.json")
+# Log events of interst
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 def normalize_column_name(name:str)->str:
     s = str(name).lower()
@@ -42,85 +44,56 @@ def normalize_number(x:str)->str | None:
     return s or None
 
 # Get all values from a Google worksheet and ingest it into a pandas data frame
-def get_all_ws_values(gc:gspread.service_account, wb_name: str, ws_name:str,unique_field=str,header_row:int=1, data_row:int=2)->pd.DataFrame:
-    wb = gc.open(wb_name)
-    sh = wb.worksheet(ws_name)
-    raw_data = sh.get_all_values()
-    headers = raw_data[header_row]                   # Second row as headers
-    rows = raw_data[data_row:]                     # Data starts from third row
-    df = pd.DataFrame(rows,columns=headers)
-    df['Timestamp'] = pd.to_datetime(df['Timestamp'], format='mixed', dayfirst=True,errors='coerce') # Convert Timestamp column to datetime
-    df = df.sort_values(by='Timestamp') # Sort by Timestamp
-    return df.drop_duplicates(subset=[unique_field], keep='last') # Remove duplicates based on unqique_field and keep the last record 
+def get_all_ws_values(gc:gspread.client.Client,applicant:dict ,header_row:int=1, data_row:int=2)->pd.DataFrame:
+    try:
+        wb_name = applicant["spreadsheet"]
+        ws_name = applicant["worksheet"]
+        unique_field = applicant["unique_field"]
+        header_row = header_row if header_row is not None  else applicant.get("header_row",1)
+        data_row = data_row if data_row is not None else applicant.get("data_row",2)
 
-#_______________________________canonical schema -----------------------------------------
-CANONICAL_COLUMNS = [
-    "timestamp","first_names","surname","id_number","contact_number","alternate_contact_number","email","street_address","suburb","city",
-    "province","postal_code","sars_number","beneficiary_number","banking_institution","bank_account_number","account_type"]
+        wb = gc.open(wb_name)
+        sh = wb.worksheet(ws_name)
+        raw_data = sh.get_all_values()
 
-mapping_dict={
-    "timestamp":"timestamp",
-    "last_updated":"timestamp",
-    "surname":"surname",
-    "last_name":"surname",
-    "first_names": "first_names",
-    "first_name":"first_names",
-    "id_number": "id_number",
-    "id" : "id_number",
-    "identity_number":"id_number",
-    "south_african_id_number":"id_number",
-    "street_address":"street_address",
-    "street": "street_address",
-    "residential_street_address":"street_address",
-    "permanent_home_address":"street_address",
-    "suburb":"suburb",
-    "suburb_township":"suburb",
-    "residential_suburb":"suburb",
-    "citytown":"city",
-    "city_town":"city",
-    "residential_citytown":"city",
-    "code":"postal_code",
-    "post_code":"postal_code",
-    "postal_code":"postal_code",
-    "province":"province",
-    "contact_number":"contact_number",
-    "cellphone":"contact_number",
-    "cellular_numbers":"contact_number",
-    "whatsapp_number":"alternate_contact_number",
-    "secondary_contact_number": "alternate_contact_number",
-    "telephone":"alternate_contact_number",
-    "sars_tax_number":"sars_tax_number",
-    "sars_number":"sars_tax_number",
-    "sars_number_if_you_have_one": "sars_tax_number",
-    "banking_institution":"banking_institution",
-    "bank_account_number":"bank_account_number",
-    "account_type":"account_type",
-    "bank_account_type":"account_type"
+        if len(raw_data) <= header_row:
+            logger.warning(f"No header row found in {ws_name}")
+            return pd.DataFrame()
 
-}
+        headers = raw_data[header_row]                   # Second row as headers
+        rows = raw_data[data_row:] if len(raw_data) > data_row else []                     # Data starts from third row
+        if not rows:
+            logger.warning(f"No data rows found in {ws_name}")
+            return pd.DataFrame()
 
-# ------------------CREATE TABLE IF NOT EXISTS statement baseed on your combined_df.dtypes, assuming column names and types match the canonical schema
-combined_students_table_query = """
-CREATE TABLE IF NOT EXISTS combined_students_table (
-    timestamp TIMESTAMP,
-    first_names TEXT,
-    surname TEXT,
-    id_number TEXT,
-    contact_number TEXT,
-    alternate_contact_number TEXT,
-    email TEXT,
-    street_address TEXT,
-    suburb TEXT,
-    city TEXT,
-    province TEXT,
-    postal_code TEXT,
-    sars_number TEXT,
-    beneficiary_number TEXT,
-    banking_institution TEXT,
-    bank_account_number TEXT,
-    account_type TEXT
-);
-"""
+        df = pd.DataFrame(rows,columns=headers)
+
+        # Normalize column names here FIRST
+        df = normalize_df_columns(df)
+        logger.info(f"Normalised columns: {list(df.columns)[:16]}")
+
+        # Convert timestamp column  if available
+        timestamp_col = next((c for c in df.columns if "timestamp" == c), None)
+
+        if timestamp_col:
+            df[timestamp_col] = pd.to_datetime(df[timestamp_col], format='mixed', dayfirst=True,errors='coerce') # Convert Timestamp column to datetime
+        else:
+            logger.warning(f"No timestamp column found in worksheet {ws_name}")
+
+        df = df.sort_values(by='timestamp') # Sort by timestamp
+
+        return df.drop_duplicates(subset=[unique_field], keep='last') # Remove duplicates based on unqique_field and keep the last record 
+
+    except gspread.exceptions.WorksheetNotFound:
+        logger.error(f"Worksheet {ws_name} not found in {wb_name}")
+        return pd.DataFrame()
+    except KeyError as e:
+        logger.error(f"Missing configuration key: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"Error reading {ws_name}: {e}")
+        return pd.DataFrame()
+
 # -----------------------------------normalization & mapping function ---------------------------------------
 def normalize_and_map(df:pd.DataFrame, mapping:dict[str,str]=mapping_dict, canonical_cols:list[str]=CANONICAL_COLUMNS)->pd.DataFrame:
 
@@ -175,34 +148,47 @@ def createTableIfNotFound(con: connect, table_name: str, schema: str):
 
     except psycopg2.Error as e:
         logger.error(f"Error checking/creating table {table_name}: {e}")
-        con.rollback()   
+        con.rollback()
+
+def validate_dataframe(df: pd.DataFrame)->bool:
+    """Validate dataframe before database insertion"""
+    if df.empty:
+        logger.error("DataFrame is empty, cannot proceed")
+        return False
+    
+    required_columns = ["id_number","first_names","surname"]
+    missing_columns = [col for col in required_columns if col not in df.columns]
+
+    if missing_columns:
+        logger.error(f"Missing required columns: {missing_columns}")
+        return False
+    
+    # Check for null ID numbers
+    if df["id_number"].isna().all():
+        logger.error("All ID numbers are null")
+        return False
+
+    # Check for empty strings in ID numbers
+    if df["id_number"].astype(str).str.strip().eq('').all():
+        logger.error("All ID numbers are empty strings")
+        return False
+    
+    logger.info("DataFrame validation passed")
+    return True
 
 if __name__ == "__main__":
-    stocktaker_app_spreadsheet= "Updated Dial A Stocktaker Application Form (Responses) NEW"
-    stocktaker_app_response = "Form responses 1"
-
-    dial_a_student_spreadsheet = "Dial a Student Application Form (2nd Version) (Responses)"
-    dial_a_student_response = "Form responses 1"
-
-    coordinators_app_spreadsheet ="Co-ordinator Online Application Form (Responses) OUR Version" 
-    coordinators_app_response ="Form Responses 1" 
-
-    back_area_app_spreadsheet ="Back Area Online Application Form (Responses)"
-    back_area_app_response = "Form Responses 1"
-
-
-    print("Getting values for Stocktaker applications")
-    stocktakers_df = get_all_ws_values(gc,stocktaker_app_spreadsheet,stocktaker_app_response,"ID Number")
-    stocktakers_df = normalize_and_map(stocktakers_df)
-    print("Getting values for Dial A Students applications")
-    das_students_df = get_all_ws_values(gc,dial_a_student_spreadsheet,dial_a_student_response,"South African ID Number")
-    das_students_df = normalize_and_map(das_students_df )
-    print("Getting values for Coordinator applications")
-    coordinators_df = get_all_ws_values(gc,coordinators_app_spreadsheet,coordinators_app_response,"Identity Number :") 
-    coordinators_df = normalize_and_map(coordinators_df )
-    print("Getting values for Back Area applications")
-    back_area_df = get_all_ws_values(gc,back_area_app_spreadsheet ,back_area_app_response,"Identity Number :",0,1)
-    back_area_df = normalize_and_map(back_area_df )
+    # Load environment variables from .env file
+    load_dotenv()
+    gc = gspread.service_account("./das-students-007f6500ea37.json")
+    applications_df = []
+    for applicant, config in SHEET_CONFIGS.items():
+        logger.info(f"Getting values for {applicant} applications")
+        df = get_all_ws_values(gc,config)
+        if not df.empty:
+            df = normalize_and_map(df)
+            applications_df.append(df)
+        else:
+            logger.warning(f"No data retrieved for {applicant}")
 
     db_name = os.getenv("DB_NAME")
     db_host= os.getenv("DB_HOST")
@@ -212,27 +198,39 @@ if __name__ == "__main__":
 
     conn_string = f"dbname={db_name} user={db_user} password={db_pwd} host={db_host} port={db_port}"
 
-    registered_stocktakers_df = pd.DataFrame()
 
-    registered_stocktakers_df = normalize_and_map(registered_stocktakers_df)
+    logger.info("Combining dataframes")
+    combined_df = pd.DataFrame()
+    for df in applications_df:
+        if not df.empty:
+            combined_df = combined_df.combine_first(df)
+    
+    if combined_df.empty:
+        logger.error("No data available after combining all sources")
+        exit(1)
 
-    print("Combining dataframes")
-    combined_df = stocktakers_df.combine_first(das_students_df)
-    combined_df = combined_df.combine_first(back_area_df)
-    combined_df = combined_df.combine_first(coordinators_df)
-    combined_df = combined_df.combine_first(registered_stocktakers_df)
+    if not validate_dataframe(combined_df):
+        logger.error("Data validation failed.Exiting.")
+        exit(1)
 
-    print("Final combined dataframe")
-    print(combined_df.sample(30))
+    logger.info("Final combined dataframe")
+    logger.info(combined_df.sample(30))
 
     try:
         with psycopg2.connect(conn_string) as con:
-            print("Getting registered stocktakers")
+            logger.info("Getting registered stocktakers")
             with con.cursor() as cur:
                 cur.execute("SELECT * FROM staging_stocktaker_tb")
                 activelist_columns = [desc[0] for desc in cur.description]
                 stkers = cur.fetchall()
+
                 registered_stocktakers_df = pd.DataFrame(stkers, columns=activelist_columns)
+                registered_stocktakers_df = normalize_and_map(registered_stocktakers_df)
+                combined_df = combined_df.combine_first(registered_stocktakers_df)
+
+                if not validate_dataframe(combined_df):
+                    logger.error("Data validation failed after combining with registered stocktakers")
+                    exit(1)
 
                 # Create CSV buffer
                 buffer = io.StringIO()
@@ -241,6 +239,7 @@ if __name__ == "__main__":
 
                 table_name = "combined_students_table"
                 temp_table = f"{table_name}_temp"
+                createTableIfNotFound(con,table_name,combined_students_table_query)
 
                 conflict_keys = ["id_number"]
                 selected_columns = list(combined_df.columns)
@@ -261,5 +260,5 @@ if __name__ == "__main__":
                 con.commit()
 
     except Exception as e:
-        print(f"Database connection failed: {e}")
+        logger.info(f"Database connection failed: {e}")
 
