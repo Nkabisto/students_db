@@ -5,9 +5,6 @@ import pandas as pd
 from dotenv import load_dotenv
 import os
 import re
-import asyncio
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy import text
 
 
 # Load environment variables from .env file
@@ -155,9 +152,9 @@ def normalize_and_map(df:pd.DataFrame, mapping:dict[str,str]=mapping_dict, canon
             df_final[col] = df_final[col].apply(normalize_number) # Remove spaces between digits
         else:
             df_final[col] = df_final[col].apply(normalize_str)# For the rest of the columns simply clean the strings
-    
+
     return df_final
-    
+
 def createTableIfNotFound(con: connect, table_name: str, schema: str):
     try:
         # Check if table exists, if not, create it
@@ -217,42 +214,52 @@ if __name__ == "__main__":
 
     registered_stocktakers_df = pd.DataFrame()
 
+    registered_stocktakers_df = normalize_and_map(registered_stocktakers_df)
+
+    print("Combining dataframes")
+    combined_df = stocktakers_df.combine_first(das_students_df)
+    combined_df = combined_df.combine_first(back_area_df)
+    combined_df = combined_df.combine_first(coordinators_df)
+    combined_df = combined_df.combine_first(registered_stocktakers_df)
+
+    print("Final combined dataframe")
+    print(combined_df.sample(30))
+
     try:
         with psycopg2.connect(conn_string) as con:
-            print("Getting values from the Activelist")
+            print("Getting registered stocktakers")
             with con.cursor() as cur:
                 cur.execute("SELECT * FROM staging_stocktaker_tb")
-                columns = [desc[0] for desc in cur.description]
-                data = cur.fetchall()
-                registered_stocktakers_df = pd.DataFrame(data, columns=columns)
-    
-            registered_stocktakers_df = normalize_and_map(registered_stocktakers_df)
+                activelist_columns = [desc[0] for desc in cur.description]
+                stkers = cur.fetchall()
+                registered_stocktakers_df = pd.DataFrame(stkers, columns=activelist_columns)
 
-            print("Combining dataframes")
-            combined_df = stocktakers_df.combine_first(das_students_df)
-            combined_df = combined_df.combine_first(back_area_df)
-            combined_df = combined_df.combine_first(coordinators_df)
-            combined_df = combined_df.combine_first(registered_stocktakers_df)
+                # Create CSV buffer
+                buffer = io.StringIO()
+                combined_df.to_csv(buffer, index=False, header=False)
+                buffer.seek(0)
 
-            print("Final combined dataframe")
-            print(combined_df)
-            
-            table_name = "combined_students_table"
-            conflict_keys = ["id_number"]
-            columns = combined_df.columns
-            update_clause = ", ".join(
-                f"{col} = EXCLUDED.{col}" for col in columns if col not in conflict_keys
-            )
+                table_name = "combined_students_table"
+                temp_table = f"{table_name}_temp"
 
-            createTableIfNotFound(con,table_name,combined_students_table_query)
-            upsert_sql = f"""
-            INSERT INTO {table_name} ({', '.join(columns)})
-            SELECT {', '.join(columns)} FROM {table_name}
-            ON CONFLICT ({', '.join(conflict_keys)}) DO UPDATE SET {update_clause};
-            """
-            await con.execute(text(upsert_sql)
-        await 
+                conflict_keys = ["id_number"]
+                selected_columns = list(combined_df.columns)
+                update_clause = ", ".join(
+                    f"{col} = EXCLUDED.{col}" for col in selected_columns if col not in conflict_keys
+                )
+                cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
+                cur.execute(f"CREATE TEMP TABLE {temp_table} (LIKE {table_name} INCLUDING ALL)")
+                # Bulk insert into temp table
+                cur.copy_expert(f"COPY {temp_table} FROM STDIN WITH CSV", buffer)
+
+                upsert_sql = f"""
+                INSERT INTO {table_name} ({', '.join(selected_columns)})
+                SELECT {', '.join(selected_columns)} FROM {temp_table}
+                ON CONFLICT ({', '.join(conflict_keys)}) DO UPDATE SET {update_clause};
+                """
+                cur.execute(upsert_sql)
+                con.commit()
+
     except Exception as e:
         print(f"Database connection failed: {e}")
-    #    print("Make sure PostgreSQL is running: sudo systemctl start postgresql")
 
