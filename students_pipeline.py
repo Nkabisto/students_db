@@ -192,3 +192,4 @@ combined_df = combined_df.combine_first(registered_stocktakers_df)
 
 print("Final combined dataframe")
 print(combined_df)
+combined_df.to_csv("combined_students.csv", index=False)
