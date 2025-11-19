@@ -5,6 +5,7 @@ import pandas as pd
 from dotenv import load_dotenv
 import os
 import re
+from config import CANONICAL_COLUMNS, mapping_dict
 
 # Load environment variables from .env file
 load_dotenv()
@@ -51,52 +52,6 @@ def get_all_ws_values(gc:gspread.service_account, wb_name: str, ws_name:str,uniq
     df['Timestamp'] = pd.to_datetime(df['Timestamp'], format='mixed', dayfirst=True,errors='coerce') # Convert Timestamp column to datetime
     df = df.sort_values(by='Timestamp') # Sort by Timestamp
     return df.drop_duplicates(subset=[unique_field], keep='last') # Remove duplicates based on unqique_field and keep the last record 
-
-#_______________________________canonical schema -----------------------------------------
-CANONICAL_COLUMNS = [
-    "timestamp","first_names","surname","id_number","contact_number","alternate_contact_number","email","street_address","suburb","city",
-    "province","postal_code","sars_number","beneficiary_number","banking_institution","bank_account_number","account_type"]
-
-mapping_dict={
-    "timestamp":"timestamp",
-    "last_updated":"timestamp",
-    "surname":"surname",
-    "last_name":"surname",
-    "first_names": "first_names",
-    "first_name":"first_names",
-    "id_number": "id_number",
-    "id" : "id_number",
-    "identity_number":"id_number",
-    "south_african_id_number":"id_number",
-    "street_address":"street_address",
-    "street": "street_address",
-    "residential_street_address":"street_address",
-    "permanent_home_address":"street_address",
-    "suburb":"suburb",
-    "suburb_township":"suburb",
-    "residential_suburb":"suburb",
-    "citytown":"city",
-    "city_town":"city",
-    "residential_citytown":"city",
-    "code":"postal_code",
-    "post_code":"postal_code",
-    "postal_code":"postal_code",
-    "province":"province",
-    "contact_number":"contact_number",
-    "cellphone":"contact_number",
-    "cellular_numbers":"contact_number",
-    "whatsapp_number":"alternate_contact_number",
-    "secondary_contact_number": "alternate_contact_number",
-    "telephone":"alternate_contact_number",
-    "sars_tax_number":"sars_tax_number",
-    "sars_number":"sars_tax_number",
-    "sars_number_if_you_have_one": "sars_tax_number",
-    "banking_institution":"banking_institution",
-    "bank_account_number":"bank_account_number",
-    "account_type":"account_type",
-    "bank_account_type":"account_type"
-
-}
 
 # -----------------------------------normalization & mapping function ---------------------------------------
 def normalize_and_map(df:pd.DataFrame, mapping:dict[str,str]=mapping_dict, canonical_cols:list[str]=CANONICAL_COLUMNS)->pd.DataFrame:
