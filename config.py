@@ -45,3 +45,22 @@ mapping_dict={
 
 }
 
+SHEET_CONFIGS = {
+    "stocktakers":{
+        "spreadsheet":"Updated Dial A Stocktaker Application Form (Responses) NEW",
+        "tab":"Form responses 1"
+    },
+    "students":{
+        "spreadsheet":"Dial a Student Application Form (2nd Version) (Responses)",
+        "tab":"Form responses 1"
+    },
+    "coordinators":{
+        "spreadsheet":"Co-ordinator Online Application Form (Responses) OUR Version",
+
+        "tab":"Form Responses 1" 
+    },
+    "back_room_staff":{
+        "spreadsheet":"Back Area Online Application Form (Responses)",
+        "tab":"Form Responses 1"
+    }
+}

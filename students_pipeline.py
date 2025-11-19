@@ -5,7 +5,7 @@ import pandas as pd
 from dotenv import load_dotenv
 import os
 import re
-from config import CANONICAL_COLUMNS, mapping_dict
+from config import CANONICAL_COLUMNS, mapping_dict, SHEET_CONFIGS
 
 # Load environment variables from .env file
 load_dotenv()
@@ -100,7 +100,7 @@ coordinators_app_response ="Form Responses 1"
 back_area_app_spreadsheet ="Back Area Online Application Form (Responses)"
 back_area_app_response = "Form Responses 1"
 
-
+def extract_gs_and_normalize():
 print("Getting values for Stocktaker applications")
 stocktakers_df = get_all_ws_values(gc,stocktaker_app_spreadsheet,stocktaker_app_response,"ID Number")
 stocktakers_df = normalize_and_map(stocktakers_df)
