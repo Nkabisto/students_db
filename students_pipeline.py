@@ -168,3 +168,22 @@ if __name__=="__main__":
     print("Final combined dataframe")
     print(combined_df)
     combined_df.to_csv("combined_students.csv", index=False)
+
+
+"""
+Recommendation Strategy: Concatetenate --> Group --->Fill-->Deduplicate
+import pandas as pd
+
+# Step 1: Concatenate all DataFrames
+dfs = [stocktakers_df, das_students_df, back_area_df, coordinators_df, registered_stocktakers_df]
+combined = pd.concat(dfs, ignore_index=True)
+
+# Step 2: Group by a unique identifier (e.g., 'ID' or 'email') and fill nulls
+# Replace 'unique_field' with your actual key column
+combined = (
+    combined
+    .groupby('unique_field', sort=False)
+    .agg(lambda x: x.ffill().bfill().iloc[0])  # Fill nulls and take the most complete row
+    .reset_index()
+)
+"""
