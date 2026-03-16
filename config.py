@@ -35,9 +35,9 @@ mapping_dict={
     "whatsapp_number":"alternate_contact_number",
     "secondary_contact_number": "alternate_contact_number",
     "telephone":"alternate_contact_number",
-    "sars_tax_number":"sars_tax_number",
-    "sars_number":"sars_tax_number",
-    "sars_number_if_you_have_one": "sars_tax_number",
+    "sars_tax_number":"sars_number",
+    "sars_number":"sars_number",
+    "sars_number_if_you_have_one": "sars_number",
     "banking_institution":"banking_institution",
     "bank_account_number":"bank_account_number",
     "account_type":"account_type",
@@ -70,7 +70,7 @@ SHEET_CONFIGS =[
     {
         "spreadsheet":"Back Area Online Application Form (Responses)",
         "tab":"Form Responses 1",
-        "unique_field":"Identity Number :,
+        "unique_field":"Identity Number :",
         "header_row":0,
         "data_row":1
     }

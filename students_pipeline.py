@@ -1,6 +1,5 @@
 import gspread
-import psycopg2
-from psycopg2 import connect
+from sqlalchemy import create_engine
 import pandas as pd
 from dotenv import load_dotenv
 import os
@@ -127,63 +126,39 @@ def normalize_and_map(df:pd.DataFrame, mapping:dict[str,str]=mapping_dict, canon
 if __name__=="__main__":
     # Load environment variables from .env file
     load_dotenv()
-    gc = gspread.service_account("./das-students-007f6500ea37.json")
-
-    list_of_google_sheets = []
-
-    for wb in SHEET_CONFIGS:
-        list_of_google_sheets.append(normalize_and_map(get_all_ws_values(gc,wb)))
-
     db_name = os.getenv("DB_NAME")
     db_host= os.getenv("DB_HOST")
     db_pwd= os.getenv("DB_PWD")
     db_port= os.getenv("DB_PORT")
     db_user= os.getenv("DB_USER")
+    gspread_key_path = os.getenv("GSPREAD_KEY_PATH")
+    gc = gspread.service_account(gspread_key_path)
 
-    conn_string = f"dbname={db_name} user={db_user} password={db_pwd} host={db_host} port={db_port}"
+    dfs = [normalize_and_map(get_all_ws_values(gc, wb)) for wb in SHEET_CONFIGS]
+
+    # 1. Create a standard connection URI
+    # Format: postgresql: //username:password@host:port/database
+    db_url = f"postgresql://{db_user}:{db_pwd}@{db_host}:{db_port}/{db_name}"
 
     registered_stocktakers_df = pd.DataFrame()
+    
+    # 2. Create the engine
+    engine = create_engine(db_url)
 
     try:
-        with psycopg2.connect(conn_string) as con:
-            print("Getting values from the Activelist")
-            with con.cursor() as cur:
-                cur.execute("SELECT * FROM staging_stocktaker_tb")
-                columns = [desc[0] for desc in cur.description]
-                data = cur.fetchall()
-                registered_stocktakers_df = pd.DataFrame(data, columns=columns)
-
+        print("Getting values from the Activelist")
+        # 3. Use pandas to read table directly
+        # No cursor, fetchall, or manual column mapping needed
+        registered_stocktakers_df = pd.read_sql("SELECT * FROM staging_stocktaker_tb", engine)
+        
     except Exception as e:
         print(f"Database connection failed: {e}")
     #    print("Make sure PostgreSQL is running: sudo systemctl start postgresql")
 
     registered_stocktakers_df = normalize_and_map(registered_stocktakers_df)
 
-    print("Combining dataframes")
-    combined_df = stocktakers_df.combine_first(das_students_df)
-    combined_df = combined_df.combine_first(back_area_df)
-    combined_df = combined_df.combine_first(coordinators_df)
-    combined_df = combined_df.combine_first(registered_stocktakers_df)
+    dfs.append(registered_stocktakers_df)
+    
+    combined_df = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['id_number'], keep='last')
 
-    print("Final combined dataframe")
     print(combined_df)
-    combined_df.to_csv("combined_students.csv", index=False)
-
-
-"""
-Recommendation Strategy: Concatetenate --> Group --->Fill-->Deduplicate
-import pandas as pd
-
-# Step 1: Concatenate all DataFrames
-dfs = [stocktakers_df, das_students_df, back_area_df, coordinators_df, registered_stocktakers_df]
-combined = pd.concat(dfs, ignore_index=True)
-
-# Step 2: Group by a unique identifier (e.g., 'ID' or 'email') and fill nulls
-# Replace 'unique_field' with your actual key column
-combined = (
-    combined
-    .groupby('unique_field', sort=False)
-    .agg(lambda x: x.ffill().bfill().iloc[0])  # Fill nulls and take the most complete row
-    .reset_index()
-)
-"""
